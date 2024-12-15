@@ -1,0 +1,73 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+
+def extrair_dados(url):
+    """Extrai os dados do nível do rio a partir da URL fornecida.
+
+    Args:
+        url (str): URL da página da qual os dados serão extraídos.
+
+    Returns:
+        pandas.DataFrame: Um DataFrame Pandas contendo os dados extraídos,
+            ou None caso ocorra algum erro.
+    """
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        table = soup.find('table', {'id': 'Table'})
+
+        data = []
+        for row in table.find_all('tr'):
+            cols = row.find_all('td')
+            cols = [ele.text.strip() for ele in cols]
+            data.append([ele for ele in cols if ele])
+
+        df = pd.DataFrame(data, columns=['Data e Hora', 'Chuva (mm) - Último', 'Chuva (mm) - 1h',
+                                         'Chuva (mm) - 4h', 'Chuva (mm) - 24h', 'Chuva (mm) - 96h',
+                                         'Chuva (mm) - 30d', 'Nível do rio (m)'])
+        return df
+    except Exception as e:
+        print(f"Erro ao extrair dados: {e}")
+        return None
+
+def gerar_relatorio_texto(df):
+    """Gera um relatório textual simples sobre o estado do rio."""
+    try:
+        nivel_atual = float(df.iloc[-1]['Nível do rio (m)'])
+        cota_transbordamento = 2.88
+        limite_alerta = cota_transbordamento * 0.7
+
+        if nivel_atual >= limite_alerta:
+            comentario = (
+                f"⚠️ Alerta! O nível do Rio dos Macacos está em {nivel_atual:.2f} m, "
+                f"próximo à cota de transbordamento ({cota_transbordamento:.2f} m). "
+                f"Há risco elevado de enchente."
+            )
+        else:
+            comentario = (
+                f"O nível do Rio dos Macacos está em {nivel_atual:.2f} m. "
+                f"Condições estáveis, sem riscos imediatos."
+            )
+
+        return comentario
+    except Exception as e:
+        return f"Erro ao gerar relatório textual: {e}"
+
+if __name__ == "__main__":
+    url = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224333320.html"
+
+    while True:
+        df = extrair_dados(url)
+        if df is not None:
+            texto = gerar_relatorio_texto(df)
+            print(texto)
+            continuar = input("Deseja continuar? (s/n): ")
+            if continuar.lower() != 's':
+                break
+        else:
+            print("Erro ao carregar os dados.")
+            break
