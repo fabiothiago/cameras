@@ -1,73 +1,129 @@
+
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import logging
 
-def extrair_dados(url):
-    """Extrai os dados do nível do rio a partir da URL fornecida.
+# Configuração do logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    Args:
-        url (str): URL da página da qual os dados serão extraídos.
+# Constantes
+COTA_TRANSBORDAMENTO = 2.88  # Cota de transbordamento do rio
+FATOR_SENSIBILIDADE = 0.02   # Aumento estimado do nível por mm de chuva
+CHAVE_API_WEATHER = "46506638d20f47c486705852241712"  # Chave da WeatherAPI
+CIDADE = "Paracambi"  # Nome da cidade
+URL_WEATHERAPI = f"http://api.weatherapi.com/v1/forecast.json?key={CHAVE_API_WEATHER}&q={CIDADE}&days=3&aqi=no&alerts=no"
+URL_RIO = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224333320.html"
 
-    Returns:
-        pandas.DataFrame: Um DataFrame Pandas contendo os dados extraídos,
-            ou None caso ocorra algum erro.
-    """
-
+def extrair_dados_nivel_rio(url):
+    """Extrai os dados do nível do rio da página HTML."""
     try:
         response = requests.get(url)
         response.raise_for_status()
-
         soup = BeautifulSoup(response.content, 'html.parser')
-        table = soup.find('table', {'id': 'Table'})
 
+        table = soup.find('table', {'id': 'Table'})
         data = []
         for row in table.find_all('tr'):
             cols = row.find_all('td')
             cols = [ele.text.strip() for ele in cols]
-            data.append([ele for ele in cols if ele])
+            if len(cols) >= 2:  # Garante que tenha ao menos duas colunas
+                data.append([cols[0], cols[-1]])  # Pega Data e Hora e Nível do Rio
 
-        df = pd.DataFrame(data, columns=['Data e Hora', 'Chuva (mm) - Último', 'Chuva (mm) - 1h',
-                                         'Chuva (mm) - 4h', 'Chuva (mm) - 24h', 'Chuva (mm) - 96h',
-                                         'Chuva (mm) - 30d', 'Nível do rio (m)'])
+        df = pd.DataFrame(data[1:], columns=['Data e Hora', 'Nível do rio (m)'])
+        df['Nível do rio (m)'] = pd.to_numeric(df['Nível do rio (m)'], errors='coerce')
+
         return df
     except Exception as e:
-        print(f"Erro ao extrair dados: {e}")
+        logging.error(f"Erro ao extrair dados do nível do rio: {e}")
         return None
 
-def gerar_relatorio_texto(df):
-    """Gera um relatório textual simples sobre o estado do rio."""
+def obter_previsao_weatherapi():
+    """Obtém a previsão do tempo detalhada para os próximos 3 dias usando WeatherAPI."""
     try:
-        nivel_atual = float(df.iloc[-1]['Nível do rio (m)'])
-        cota_transbordamento = 2.88
-        limite_alerta = cota_transbordamento * 0.7
+        response = requests.get(URL_WEATHERAPI)
+        response.raise_for_status()
+        dados = response.json()
 
-        if nivel_atual >= limite_alerta:
-            comentario = (
-                f"⚠️ Alerta! O nível do Rio dos Macacos está em {nivel_atual:.2f} m, "
-                f"próximo à cota de transbordamento ({cota_transbordamento:.2f} m). "
-                f"Há risco elevado de enchente."
-            )
-        else:
-            comentario = (
-                f"O nível do Rio dos Macacos está em {nivel_atual:.2f} m. "
-                f"Condições estáveis, sem riscos imediatos."
-            )
-
-        return comentario
+        previsao = [
+            {
+                "data": dia['date'],
+                "temp_max": dia['day']['maxtemp_c'],
+                "temp_min": dia['day']['mintemp_c'],
+                "chuva_mm": dia['day']['totalprecip_mm'],
+                "condicao": dia['day']['condition']['text']
+            }
+            for dia in dados['forecast']['forecastday']
+        ]
+        return previsao
     except Exception as e:
-        return f"Erro ao gerar relatório textual: {e}"
+        logging.error(f"Erro ao obter previsão do tempo: {e}")
+        return None
+
+def gerar_previsao_nivel_rio(nivel_atual, previsao_chuva):
+    """Gera uma previsão do nível do rio com base na precipitação prevista."""
+    previsao = []
+    for dia in previsao_chuva:
+        aumento_estimado = dia['chuva_mm'] * FATOR_SENSIBILIDADE
+        nivel_previsto = round(nivel_atual + aumento_estimado, 2)
+        risco = classificar_risco(nivel_previsto)
+        previsao.append({
+            "data": dia['data'],
+            "chuva_mm": dia['chuva_mm'],
+            "nivel_previsto": nivel_previsto,
+            "temp_max": dia['temp_max'],
+            "temp_min": dia['temp_min'],
+            "condicao": dia['condicao'],
+            "risco": risco
+        })
+    return previsao
+
+def classificar_risco(nivel):
+    """Classifica o risco baseado no nível previsto do rio."""
+    if nivel >= COTA_TRANSBORDAMENTO:
+        return "⚠️ Risco Crítico - Transbordamento iminente!"
+    elif nivel >= COTA_TRANSBORDAMENTO * 0.7:
+        return "⚠️ Risco Alto - Nível próximo ao limite."
+    else:
+        return "✅ Risco Baixo - Condições estáveis."
+
+def gerar_relatorio(nivel_atual, previsao_rio):
+    """Gera um relatório consolidado do estado atual e previsão do nível do rio."""
+    relatorio = (f"\n🔹 **Relatório do Rio dos Macacos** 🔹\n"
+                 f"Nível atual: {nivel_atual:.2f} m\n"
+                 f"Cota de transbordamento: {COTA_TRANSBORDAMENTO:.2f} m\n\n")
+
+    for dia in previsao_rio:
+        relatorio += (f"📅 **Previsão para {dia['data']}**:\n"
+                      f"Condição: {dia['condicao']}\n"
+                      f"Temperatura: {dia['temp_min']}°C - {dia['temp_max']}°C\n"
+                      f"Precipitação prevista: {dia['chuva_mm']} mm\n"
+                      f"Nível previsto do rio: {dia['nivel_previsto']} m\n"
+                      f"Classificação: {dia['risco']}\n\n")
+
+    return relatorio
 
 if __name__ == "__main__":
-    url = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224333320.html"
+    logging.info("Iniciando o monitoramento do nível do rio e previsão do tempo.")
+    
+    # Extração do nível do rio
+    df_nivel_rio = extrair_dados_nivel_rio(URL_RIO)
+    if df_nivel_rio is not None and not df_nivel_rio.empty:
+        nivel_atual = df_nivel_rio['Nível do rio (m)'].iloc[-1]
+        logging.info(f"Nível atual do rio: {nivel_atual:.2f} m.")
 
-    while True:
-        df = extrair_dados(url)
-        if df is not None:
-            texto = gerar_relatorio_texto(df)
-            print(texto)
-            continuar = input("Deseja continuar? (s/n): ")
-            if continuar.lower() != 's':
-                break
+        # Obtenção da previsão do tempo
+        previsao_tempo = obter_previsao_weatherapi()
+        if previsao_tempo:
+            # Cálculo da previsão do nível do rio
+            previsao_nivel_rio = gerar_previsao_nivel_rio(nivel_atual, previsao_tempo)
+            if previsao_nivel_rio:
+                # Geração do relatório consolidado
+                relatorio = gerar_relatorio(nivel_atual, previsao_nivel_rio)
+                print(relatorio)
+            else:
+                logging.error("Erro ao calcular a previsão do nível do rio.")
         else:
-            print("Erro ao carregar os dados.")
-            break
+            logging.error("Erro ao obter a previsão do tempo.")
+    else:
+        logging.error("Erro ao carregar os dados do nível do rio.")
