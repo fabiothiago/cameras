@@ -7,8 +7,10 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Constantes
-COTA_TRANSBORDAMENTO = 2.88  # Cota de transbordamento do rio
+COTA_TRANSBORDAMENTO_PARACAMBI = 2.88  # Cota de transbordamento do rio em Paracambi
+COTA_TRANSBORDAMENTO_PAULO_FRONTIN = 3.31  # Cota de transbordamento do rio em Paulo Frontin
 FATOR_SENSIBILIDADE = 0.02   # Aumento estimado do nível por mm de chuva
+AREA_DRENAGEM_RIO_MACACOS = 83  # Área de drenagem do Rio dos Macacos em km²
 CHAVE_API_WEATHER = "46506638d20f47c486705852241712"  # Chave da WeatherAPI
 CIDADE_PARACAMBI = "Paracambi"  # Nome da cidade de Paracambi
 CIDADE_PAULO_FRONTIN = "Paulo Frontin"  # Nome da cidade de Paulo Frontin
@@ -68,7 +70,8 @@ def gerar_previsao_nivel_rio_paracambi_com_chuva_paulo_frontin(nivel_atual, prev
     for dia in previsao_chuva_paracambi:
         # Incorporar a chuva de Paulo Frontin para o cálculo de Paracambi
         chuva_adicional = next((item['chuva_mm'] for item in previsao_chuva_paulo_frontin if item['data'] == dia['data']), 0)
-        aumento_estimado = (dia['chuva_mm'] + chuva_adicional) * FATOR_SENSIBILIDADE
+        # Ajustar o impacto da precipitação com base na área de drenagem
+        aumento_estimado = ((dia['chuva_mm'] + chuva_adicional) * FATOR_SENSIBILIDADE) * (AREA_DRENAGEM_RIO_MACACOS / 83)  # Proporção da área
         nivel_previsto = round(nivel_atual + aumento_estimado, 2)
         risco = classificar_risco(nivel_previsto)
         previsao.append({
@@ -85,9 +88,9 @@ def gerar_previsao_nivel_rio_paracambi_com_chuva_paulo_frontin(nivel_atual, prev
 
 def classificar_risco(nivel):
     """Classifica o risco baseado no nível previsto do rio."""
-    if nivel >= COTA_TRANSBORDAMENTO:
+    if nivel >= COTA_TRANSBORDAMENTO_PARACAMBI:
         return "⚠️ Risco Crítico - Transbordamento iminente!"
-    elif nivel >= COTA_TRANSBORDAMENTO * 0.7:
+    elif nivel >= COTA_TRANSBORDAMENTO_PARACAMBI * 0.7:
         return "⚠️ Risco Alto - Nível próximo ao limite."
     else:
         return "✅ Risco Baixo - Condições estáveis."
@@ -96,7 +99,7 @@ def gerar_relatorio(nivel_atual, previsao_rio):
     """Gera um relatório consolidado do estado atual e previsão do nível do rio."""
     relatorio = (f"\n🔹 **Relatório do Rio dos Macacos** 🔹\n"
                  f"Nível atual: {nivel_atual:.2f} m\n"
-                 f"Cota de transbordamento: {COTA_TRANSBORDAMENTO:.2f} m\n\n")
+                 f"Cota de transbordamento: {COTA_TRANSBORDAMENTO_PARACAMBI:.2f} m\n\n")
 
     for dia in previsao_rio:
         relatorio += (f"📅 **Previsão para {dia['data']}**:\n"
