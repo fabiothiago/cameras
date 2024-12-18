@@ -14,8 +14,8 @@ AREA_DRENAGEM_RIO_MACACOS = 83  # Área de drenagem do Rio dos Macacos em km²
 CHAVE_API_WEATHER = "46506638d20f47c486705852241712"  # Chave da WeatherAPI
 CIDADE_PARACAMBI = "Paracambi"  # Nome da cidade de Paracambi
 CIDADE_PAULO_FRONTIN = "Paulo Frontin"  # Nome da cidade de Paulo Frontin
-URL_WEATHERAPI_PARACAMBI = f"http://api.weatherapi.com/v1/forecast.json?key={CHAVE_API_WEATHER}&q={CIDADE_PARACAMBI}&days=3&aqi=no&alerts=no"
-URL_WEATHERAPI_PAULO_FRONTIN = f"http://api.weatherapi.com/v1/forecast.json?key={CHAVE_API_WEATHER}&q={CIDADE_PAULO_FRONTIN}&days=3&aqi=no&alerts=no"
+URL_WEATHERAPI_PARACAMBI = f"http://api.weatherapi.com/v1/forecast.json?key={CHAVE_API_WEATHER}&q={CIDADE_PARACAMBI}&days=6&aqi=no&alerts=no"
+URL_WEATHERAPI_PAULO_FRONTIN = f"http://api.weatherapi.com/v1/forecast.json?key={CHAVE_API_WEATHER}&q={CIDADE_PAULO_FRONTIN}&days=6&aqi=no&alerts=no"
 URL_RIO_PARACAMBI = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224333320.html"  # URL do Rio de Paracambi
 URL_RIO_PAULO_FRONTIN = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224351220.html"  # URL do Rio de Paulo Frontin
 
@@ -43,7 +43,7 @@ def extrair_dados_nivel_rio(url):
         return None
 
 def obter_previsao_weatherapi(url):
-    """Obtém a previsão do tempo detalhada para os próximos 3 dias usando WeatherAPI."""
+    """Obtém a previsão do tempo detalhada para os próximos 6 dias usando WeatherAPI."""
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -88,12 +88,17 @@ def gerar_previsao_nivel_rio_paracambi_com_chuva_paulo_frontin(nivel_atual, prev
 
 def classificar_risco(nivel):
     """Classifica o risco baseado no nível previsto do rio."""
-    if nivel >= COTA_TRANSBORDAMENTO_PARACAMBI:
-        return "⚠️ Risco Crítico - Transbordamento iminente!"
-    elif nivel >= COTA_TRANSBORDAMENTO_PARACAMBI * 0.7:
-        return "⚠️ Risco Alto - Nível próximo ao limite."
+    porcentagem_cota = nivel / COTA_TRANSBORDAMENTO_PARACAMBI
+    if porcentagem_cota >= 0.7:
+        return "🏔️ Corra para as Montanhas!"
+    elif porcentagem_cota >= 0.6:
+        return "🔴 Risco Muito Alto"
+    elif porcentagem_cota >= 0.5:
+        return "🟠 Risco Alto"
+    elif porcentagem_cota >= 0.3:
+        return "🟡 Risco Moderado"
     else:
-        return "✅ Risco Baixo - Condições estáveis."
+        return "🟢 Risco Baixo"
 
 def gerar_relatorio(nivel_atual, previsao_rio):
     """Gera um relatório consolidado do estado atual e previsão do nível do rio."""
