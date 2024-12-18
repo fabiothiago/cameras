@@ -1,0 +1,242 @@
+import json
+import os
+from datetime import datetime, timedelta
+
+# Constantes do sistema
+ARQUIVO_DADOS = "ponto.json"
+ARQUIVO_PAGAMENTO = "pagamento.json"
+SALARIO_BASE = 5096.52
+HORAS_MENSAIS = 220  # Jornada mensal padrão de 220 horas
+VALOR_HORA = SALARIO_BASE / HORAS_MENSAIS
+JORNADA_DIARIA = timedelta(hours=8)
+
+# Carregar dados do arquivo JSON
+def carregar_dados():
+    if os.path.exists(ARQUIVO_DADOS):
+        with open(ARQUIVO_DADOS, 'r') as arquivo:
+            return json.load(arquivo)
+    return {}
+
+# Carregar dados de pagamento (horas extras pendentes)
+def carregar_pagamento():
+    if os.path.exists(ARQUIVO_PAGAMENTO):
+        with open(ARQUIVO_PAGAMENTO, 'r') as arquivo:
+            return json.load(arquivo)
+    return {}
+
+# Salvar dados no arquivo JSON
+def salvar_dados(dados):
+    with open(ARQUIVO_DADOS, 'w') as arquivo:
+        json.dump(dados, arquivo, indent=4)
+
+# Salvar dados de pagamento
+def salvar_pagamento(pagamento):
+    with open(ARQUIVO_PAGAMENTO, 'w') as arquivo:
+        json.dump(pagamento, arquivo, indent=4)
+
+# Registrar batida de ponto
+def registrar_batida(dados):
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    if hoje not in dados:
+        dados[hoje] = []
+
+    if len(dados[hoje]) < 4:
+        hora_atual = datetime.now().strftime("%H:%M:%S")
+        dados[hoje].append(hora_atual)
+        print(f"✅ Batida registrada: {hora_atual}")
+    else:
+        print("⚠️ Todas as 4 batidas já foram registradas para hoje!")
+
+    salvar_dados(dados)
+
+# Registrar falta se não houver batidas completas
+def registrar_falta(dados):
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    if hoje not in dados or len(dados[hoje]) < 4:
+        dados[hoje] = ["falta"]
+        print(f"⚠️ Falta registrada para o dia {hoje}.")
+    salvar_dados(dados)
+
+# Editar batida de ponto
+def editar_batida(dados):
+    hoje = input("Digite a data do dia (AAAA-MM-DD) para editar as batidas: ")
+    if hoje not in dados:
+        print("⚠️ Não há batidas registradas para este dia.")
+        return
+
+    print(f"Batidas registradas para o dia {hoje}: {dados[hoje]}")
+    indice = int(input("Digite o número da batida a ser editada (1-4): ")) - 1
+
+    if 0 <= indice < len(dados[hoje]):
+        nova_batida = input(f"Digite o novo horário para a batida {indice + 1} (formato HH:MM:SS): ")
+        dados[hoje][indice] = nova_batida
+        print(f"✅ Batida {indice + 1} atualizada para {nova_batida}.")
+    else:
+        print("⚠️ Número da batida inválido.")
+
+    salvar_dados(dados)
+
+# Gerar relatório diário, semanal ou mensal
+def gerar_relatorio(dados, tipo="diario"):
+    print("\n📋 Relatório de Ponto\n")
+    saldo_devido = timedelta()
+    total_horas_extras = timedelta()
+
+    if tipo == "diario":
+        for data, batidas in sorted(dados.items()):
+            if len(batidas) > 0:
+                if batidas == ["falta"]:
+                    print(f"📅 Data: {data} - Falta registrada.")
+                    continue
+                horas_extras, horas_devidas = exibir_relatorio_dia(data, batidas)
+                total_horas_extras += horas_extras
+                saldo_devido += horas_devidas
+    elif tipo == "semanal":
+        saldo_devido, total_horas_extras = gerar_relatorio_periodo(dados, 7, "Relatório Semanal")
+    elif tipo == "mensal":
+        saldo_devido, total_horas_extras = gerar_relatorio_periodo(dados, 30, "Relatório Mensal")
+    
+    if total_horas_extras > timedelta():
+        valor_hora_extra = total_horas_extras.total_seconds() / 3600 * VALOR_HORA * 1.5
+        print(f"\n💰 Total de horas extras: {total_horas_extras}")
+        print(f"💵 Valor a receber por horas extras: R$ {valor_hora_extra:.2f}")
+    
+    if saldo_devido > timedelta():
+        print(f"\n💼 Saldo devedor de horas: {saldo_devido}")
+    else:
+        print("\n✅ Não há saldo devedor de horas.")
+
+# Gerar relatório de pagamento de horas extras (do mês anterior)
+def gerar_pagamento(dados, pagamento):
+    hoje = datetime.now()
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+    mes_passado = mes_atual - 1 if mes_atual > 1 else 12
+    ano_passado = ano_atual if mes_atual > 1 else ano_atual - 1
+    mes_str = f"{mes_passado:02d}"
+    ano_str = f"{ano_passado}"
+    
+    print(f"\n📋 Relatório de Pagamento de Horas Extras - {mes_str}/{ano_str}\n")
+    total_horas_extras = timedelta()
+    
+    for data, batidas in dados.items():
+        if len(batidas) >= 4 and batidas != ["falta"]:
+            entrada = datetime.strptime(batidas[0], "%H:%M:%S")
+            saida_intervalo = datetime.strptime(batidas[1], "%H:%M:%S")
+            retorno_intervalo = datetime.strptime(batidas[2], "%H:%M:%S")
+            saida = datetime.strptime(batidas[3], "%H:%M:%S")
+            periodo_manha = saida_intervalo - entrada
+            periodo_tarde = saida - retorno_intervalo
+            total_trabalhado = periodo_manha + periodo_tarde
+
+            if total_trabalhado > JORNADA_DIARIA:
+                horas_extras = total_trabalhado - JORNADA_DIARIA
+                total_horas_extras += horas_extras
+
+    # Armazenar as horas extras pendentes de pagamento no mês seguinte
+    if total_horas_extras > timedelta():
+        pagamento[f"{ano_str}-{mes_str}"] = str(total_horas_extras)
+        salvar_pagamento(pagamento)
+        valor_hora_extra = total_horas_extras.total_seconds() / 3600 * VALOR_HORA * 1.5
+        print(f"💰 Total de horas extras a serem pagas: {total_horas_extras}")
+        print(f"💵 Valor a pagar por horas extras: R$ {valor_hora_extra:.2f}")
+    else:
+        print("✅ Não há horas extras para pagamento no mês anterior.")
+
+# Gerar relatório para períodos (semanal ou mensal)
+def gerar_relatorio_periodo(dados, dias, titulo):
+    hoje = datetime.now()
+    inicio = hoje - timedelta(days=dias)
+    print(f"\n📋 {titulo} ({inicio.strftime('%Y-%m-%d')} a {hoje.strftime('%Y-%m-%d')})\n")
+    saldo_devido = timedelta()
+    total_horas_extras = timedelta()
+
+    for data, batidas in sorted(dados.items()):
+        if inicio.strftime("%Y-%m-%d") <= data <= hoje.strftime("%Y-%m-%d") and len(batidas) > 0:
+            if batidas == ["falta"]:
+                print(f"📅 Data: {data} - Falta registrada.")
+                continue
+            horas_extras, horas_devidas = exibir_relatorio_dia(data, batidas)
+            total_horas_extras += horas_extras
+            saldo_devido += horas_devidas
+    return saldo_devido, total_horas_extras
+
+# Exibir relatório para um único dia
+def exibir_relatorio_dia(data, batidas):
+    print(f"📅 Data: {data}")
+    horas_extras = timedelta()
+    saldo_devido = timedelta()
+
+    if len(batidas) < 4:
+        print("⚠️ Dia incompleto.")
+        return horas_extras, saldo_devido
+    elif batidas == ["falta"]:
+        print("⚠️ Falta registrada.")
+        return horas_extras, saldo_devido
+    else:
+        entrada = datetime.strptime(batidas[0], "%H:%M:%S")
+        saida_intervalo = datetime.strptime(batidas[1], "%H:%M:%S")
+        retorno_intervalo = datetime.strptime(batidas[2], "%H:%M:%S")
+        saida = datetime.strptime(batidas[3], "%H:%M:%S")
+
+        periodo_manha = saida_intervalo - entrada
+        periodo_tarde = saida - retorno_intervalo
+        total_trabalhado = periodo_manha + periodo_tarde
+
+        print(f"  Entrada: {batidas[0]}")
+        print(f"  Intervalo (Saída): {batidas[1]}")
+        print(f"  Intervalo (Retorno): {batidas[2]}")
+        print(f"  Saída: {batidas[3]}")
+        print(f"  ⏳ Total trabalhado: {total_trabalhado}")
+
+        if total_trabalhado > JORNADA_DIARIA:
+            horas_extras = total_trabalhado - JORNADA_DIARIA
+            print(f"  🔥 Horas extras: {horas_extras}")
+        elif total_trabalhado < JORNADA_DIARIA:
+            saldo_devido = JORNADA_DIARIA - total_trabalhado
+            print(f"  💼 Saldo devedor de horas: {saldo_devido}")
+        else:
+            print("  ✅ Jornada completa, sem horas extras ou saldo devedor.")
+
+    print("-" * 30)
+    return horas_extras, saldo_devido
+
+# Menu principal
+def menu():
+    dados = carregar_dados()
+    pagamento = carregar_pagamento()
+    while True:
+        print("\n=== Sistema de Gerenciamento de Ponto ===")
+        print("1. Registrar batida de ponto")
+        print("2. Registrar falta")
+        print("3. Editar batida de ponto")
+        print("4. Gerar relatório diário")
+        print("5. Gerar relatório semanal")
+        print("6. Gerar relatório mensal")
+        print("7. Gerar relatório de pagamento de horas extras")
+        print("8. Sair")
+
+        opcao = input("Escolha uma opção: ").strip()
+        if opcao == '1':
+            registrar_batida(dados)
+        elif opcao == '2':
+            registrar_falta(dados)
+        elif opcao == '3':
+            editar_batida(dados)
+        elif opcao == '4':
+            gerar_relatorio(dados, tipo="diario")
+        elif opcao == '5':
+            gerar_relatorio(dados, tipo="semanal")
+        elif opcao == '6':
+            gerar_relatorio(dados, tipo="mensal")
+        elif opcao == '7':
+            gerar_pagamento(dados, pagamento)
+        elif opcao == '8':
+            print("🔚 Saindo do sistema. Até logo!")
+            break
+        else:
+            print("❌ Opção inválida! Tente novamente.")
+
+# Executar o programa
+if __name__ == "__main__":
+    menu()
