@@ -7,17 +7,17 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Constantes
-COTA_TRANSBORDAMENTO_PARACAMBI = 2.88  # Cota de transbordamento do rio em Paracambi
-COTA_TRANSBORDAMENTO_PAULO_FRONTIN = 3.31  # Cota de transbordamento do rio em Paulo Frontin
-FATOR_SENSIBILIDADE = 0.02   # Aumento estimado do nível por mm de chuva
-AREA_DRENAGEM_RIO_MACACOS = 83  # Área de drenagem do Rio dos Macacos em km²
-CHAVE_API_WEATHER = "46506638d20f47c486705852241712"  # Chave da WeatherAPI
-CIDADE_PARACAMBI = "Paracambi"  # Nome da cidade de Paracambi
-CIDADE_PAULO_FRONTIN = "Paulo Frontin"  # Nome da cidade de Paulo Frontin
+COTA_TRANSBORDAMENTO_PARACAMBI = 2.88
+COTA_TRANSBORDAMENTO_PAULO_FRONTIN = 3.31
+FATOR_SENSIBILIDADE = 0.02
+AREA_DRENAGEM_RIO_MACACOS = 83
+CHAVE_API_WEATHER = "46506638d20f47c486705852241712"
+CIDADE_PARACAMBI = "Paracambi"
+CIDADE_PAULO_FRONTIN = "Paulo Frontin"
 URL_WEATHERAPI_PARACAMBI = f"http://api.weatherapi.com/v1/forecast.json?key={CHAVE_API_WEATHER}&q={CIDADE_PARACAMBI}&days=6&aqi=no&alerts=no"
 URL_WEATHERAPI_PAULO_FRONTIN = f"http://api.weatherapi.com/v1/forecast.json?key={CHAVE_API_WEATHER}&q={CIDADE_PAULO_FRONTIN}&days=6&aqi=no&alerts=no"
-URL_RIO_PARACAMBI = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224333320.html"  # URL do Rio de Paracambi
-URL_RIO_PAULO_FRONTIN = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224351220.html"  # URL do Rio de Paulo Frontin
+URL_RIO_PARACAMBI = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224333320.html"
+URL_RIO_PAULO_FRONTIN = "http://alertadecheias.inea.rj.gov.br/alertadecheias/224351220.html"
 
 def extrair_dados_nivel_rio(url):
     """Extrai os dados do nível do rio da página HTML."""
@@ -27,13 +27,19 @@ def extrair_dados_nivel_rio(url):
         soup = BeautifulSoup(response.content, 'html.parser')
 
         table = soup.find('table', {'id': 'Table'})
+        if not table:
+            raise ValueError("Tabela não encontrada na página HTML.")
+        
         data = []
         for row in table.find_all('tr'):
             cols = row.find_all('td')
             cols = [ele.text.strip() for ele in cols]
-            if len(cols) >= 2:  # Garante que tenha ao menos duas colunas
-                data.append([cols[0], cols[-1]])  # Pega Data e Hora e Nível do Rio
+            if len(cols) >= 2:
+                data.append([cols[0], cols[-1]])
 
+        if len(data) < 2:
+            raise ValueError("Dados insuficientes extraídos da tabela.")
+        
         df = pd.DataFrame(data[1:], columns=['Data e Hora', 'Nível do rio (m)'])
         df['Nível do rio (m)'] = pd.to_numeric(df['Nível do rio (m)'], errors='coerce')
 
@@ -49,12 +55,17 @@ def obter_previsao_weatherapi(url):
         response.raise_for_status()
         dados = response.json()
 
+        if 'forecast' not in dados or 'forecastday' not in dados['forecast']:
+            raise ValueError("Dados de previsão do tempo não encontrados na resposta da API.")
+
         previsao = [
             {
                 "data": dia['date'],
                 "temp_max": dia['day']['maxtemp_c'],
                 "temp_min": dia['day']['mintemp_c'],
                 "chuva_mm": dia['day']['totalprecip_mm'],
+                "velocidade_vento_kph": dia['day']['maxwind_kph'],
+                "umidade_relativa": dia['day']['avghumidity'],
                 "condicao": dia['day']['condition']['text']
             }
             for dia in dados['forecast']['forecastday']
@@ -66,59 +77,71 @@ def obter_previsao_weatherapi(url):
 
 def gerar_previsao_nivel_rio_paracambi_com_chuva_paulo_frontin(nivel_atual, previsao_chuva_paracambi, previsao_chuva_paulo_frontin):
     """Gera a previsão do nível do rio em Paracambi com base na precipitação prevista, incluindo a chuva em Paulo Frontin."""
-    previsao = []
-    for dia in previsao_chuva_paracambi:
-        # Incorporar a chuva de Paulo Frontin para o cálculo de Paracambi
-        chuva_adicional = next((item['chuva_mm'] for item in previsao_chuva_paulo_frontin if item['data'] == dia['data']), 0)
-        # Ajustar o impacto da precipitação com base na área de drenagem
-        aumento_estimado = ((dia['chuva_mm'] + chuva_adicional) * FATOR_SENSIBILIDADE) * (AREA_DRENAGEM_RIO_MACACOS / 83)  # Proporção da área
-        nivel_previsto = round(nivel_atual + aumento_estimado, 2)
-        risco = classificar_risco(nivel_previsto)
-        previsao.append({
-            "data": dia['data'],
-            "chuva_mm_paracambi": dia['chuva_mm'],
-            "chuva_mm_paulo_frontin": chuva_adicional,
-            "nivel_previsto": nivel_previsto,
-            "temp_max": dia['temp_max'],
-            "temp_min": dia['temp_min'],
-            "condicao": dia['condicao'],
-            "risco": risco
-        })
-    return previsao
+    try:
+        previsao = []
+        for dia in previsao_chuva_paracambi:
+            chuva_adicional = next((item['chuva_mm'] for item in previsao_chuva_paulo_frontin if item['data'] == dia['data']), 0)
+            aumento_estimado = ((dia['chuva_mm'] + chuva_adicional) * FATOR_SENSIBILIDADE) * (AREA_DRENAGEM_RIO_MACACOS / 83)
+            nivel_previsto = round(nivel_atual + aumento_estimado, 2)
+            risco = classificar_risco(nivel_previsto)
+            previsao.append({
+                "data": dia['data'],
+                "chuva_mm_paracambi": dia['chuva_mm'],
+                "chuva_mm_paulo_frontin": chuva_adicional,
+                "nivel_previsto": nivel_previsto,
+                "temp_max": dia['temp_max'],
+                "temp_min": dia['temp_min'],
+                "velocidade_vento_kph": dia['velocidade_vento_kph'],
+                "umidade_relativa": dia['umidade_relativa'],
+                "condicao": dia['condicao'],
+                "risco": risco
+            })
+        return previsao
+    except Exception as e:
+        logging.error(f"Erro ao gerar previsão do nível do rio: {e}")
+        return []
 
 def classificar_risco(nivel):
     """Classifica o risco baseado no nível previsto do rio."""
-    porcentagem_cota = nivel / COTA_TRANSBORDAMENTO_PARACAMBI
-    if porcentagem_cota >= 0.7:
-        return "🏔️ Corra para as Montanhas!"
-    elif porcentagem_cota >= 0.6:
-        return "🔴 Risco Muito Alto"
-    elif porcentagem_cota >= 0.5:
-        return "🟠 Risco Alto"
-    elif porcentagem_cota >= 0.3:
-        return "🟡 Risco Moderado"
-    else:
-        return "🟢 Risco Baixo"
+    try:
+        if nivel >= COTA_TRANSBORDAMENTO_PARACAMBI * 0.7:
+            return "🏔️ CORRA PARA AS MONTANHAS - Risco extremo!"
+        elif nivel >= COTA_TRANSBORDAMENTO_PARACAMBI * 0.6:
+            return "⚠️ Risco Muito Alto - Fique atento!"
+        elif nivel >= COTA_TRANSBORDAMENTO_PARACAMBI * 0.5:
+            return "⚠️ Risco Alto - Monitorar constantemente."
+        elif nivel >= COTA_TRANSBORDAMENTO_PARACAMBI * 0.3:
+            return "⚠️ Risco Moderado - Nível considerável."
+        else:
+            return "✅ Risco Baixo - Condições estáveis."
+    except Exception as e:
+        logging.error(f"Erro ao classificar risco: {e}")
+        return "Erro ao classificar."
 
 def gerar_relatorio(nivel_atual, previsao_rio):
     """Gera um relatório consolidado do estado atual e previsão do nível do rio."""
-    relatorio = (f"\n🔹 **Relatório do Rio dos Macacos** 🔹\n"
-                 f"Nível atual: {nivel_atual:.2f} m\n"
-                 f"Cota de transbordamento: {COTA_TRANSBORDAMENTO_PARACAMBI:.2f} m\n\n")
+    try:
+        relatorio = (f"\n🔹 **Relatório do Rio dos Macacos** 🔹\n"
+                     f"Nível atual: {nivel_atual:.2f} m\n"
+                     f"Cota de transbordamento: {COTA_TRANSBORDAMENTO_PARACAMBI:.2f} m\n\n")
 
-    for dia in previsao_rio:
-        relatorio += (f"📅 **Previsão para {dia['data']}**:\n"
-                      f"Condição: {dia['condicao']}\n"
-                      f"Temperatura: {dia['temp_min']}°C - {dia['temp_max']}°C\n"
-                      f"Precipitação prevista: {dia['chuva_mm_paracambi']} mm (Paracambi) + {dia['chuva_mm_paulo_frontin']} mm (Paulo Frontin)\n"
-                      f"Nível previsto do rio: {dia['nivel_previsto']} m\n"
-                      f"Classificação: {dia['risco']}\n\n")
-
-    return relatorio
+        for dia in previsao_rio:
+            relatorio += (f"📅 **Previsão para {dia['data']}**:\n"
+                          f"Condição: {dia['condicao']}\n"
+                          f"Temperatura: {dia['temp_min']}°C - {dia['temp_max']}°C\n"
+                          f"Velocidade do Vento: {dia['velocidade_vento_kph']} km/h\n"
+                          f"Umidade Relativa: {dia['umidade_relativa']}%\n"
+                          f"Precipitação prevista: {dia['chuva_mm_paracambi']} mm (Paracambi) + {dia['chuva_mm_paulo_frontin']} mm (Paulo Frontin)\n"
+                          f"Nível previsto do rio: {dia['nivel_previsto']} m\n"
+                          f"Classificação: {dia['risco']}\n\n")
+        return relatorio
+    except Exception as e:
+        logging.error(f"Erro ao gerar relatório: {e}")
+        return "Erro ao gerar relatório."
 
 if __name__ == "__main__":
     logging.info("Iniciando o monitoramento do nível do rio e previsão do tempo.")
-    
+
     # Extração do nível do rio em Paracambi
     df_nivel_rio_paracambi = extrair_dados_nivel_rio(URL_RIO_PARACAMBI)
     if df_nivel_rio_paracambi is not None and not df_nivel_rio_paracambi.empty:
@@ -131,25 +154,17 @@ if __name__ == "__main__":
             # Extração do nível do rio em Paulo Frontin
             df_nivel_rio_paulo_frontin = extrair_dados_nivel_rio(URL_RIO_PAULO_FRONTIN)
             if df_nivel_rio_paulo_frontin is not None and not df_nivel_rio_paulo_frontin.empty:
-                nivel_atual_paulo_frontin = df_nivel_rio_paulo_frontin['Nível do rio (m)'].iloc[-1]
-                logging.info(f"Nível atual do rio em Paulo Frontin: {nivel_atual_paulo_frontin:.2f} m.")
-                
-                # Obtenção da previsão do tempo para Paulo Frontin
                 previsao_tempo_paulo_frontin = obter_previsao_weatherapi(URL_WEATHERAPI_PAULO_FRONTIN)
                 if previsao_tempo_paulo_frontin:
-                    # Cálculo da previsão do nível do rio em Paracambi com a chuva de Paulo Frontin
-                    previsao_nivel_rio_paracambi = gerar_previsao_nivel_rio_paracambi_com_chuva_paulo_frontin(nivel_atual_paracambi, previsao_tempo_paracambi, previsao_tempo_paulo_frontin)
-                    if previsao_nivel_rio_paracambi:
-                        # Geração do relatório consolidado
-                        relatorio = gerar_relatorio(nivel_atual_paracambi, previsao_nivel_rio_paracambi)
-                        print(relatorio)
-                    else:
-                        logging.error("Erro ao calcular a previsão do nível do rio em Paracambi.")
+                    previsao_nivel_rio_paracambi = gerar_previsao_nivel_rio_paracambi_com_chuva_paulo_frontin(
+                        nivel_atual_paracambi, previsao_tempo_paracambi, previsao_tempo_paulo_frontin)
+                    relatorio = gerar_relatorio(nivel_atual_paracambi, previsao_nivel_rio_paracambi)
+                    print(relatorio)
                 else:
-                    logging.error("Erro ao obter a previsão do tempo para Paulo Frontin.")
+                    logging.error("Erro ao obter previsão do tempo para Paulo Frontin.")
             else:
-                logging.error("Erro ao carregar os dados do nível do rio em Paulo Frontin.")
+                logging.error("Erro ao carregar dados do nível do rio em Paulo Frontin.")
         else:
-            logging.error("Erro ao obter a previsão do tempo em Paracambi.")
+            logging.error("Erro ao obter previsão do tempo para Paracambi.")
     else:
-        logging.error("Erro ao carregar os dados do nível do rio em Paracambi.")
+        logging.error("Erro ao carregar dados do nível do rio em Paracambi.")
