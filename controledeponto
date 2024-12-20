@@ -14,12 +14,11 @@ VALOR_HORA = SALARIO_BASE / HORAS_MENSAIS
 JORNADA_DIARIA = timedelta(hours=8)
 DRIVE_FOLDER_NAME = "PontoGerenciado"
 
-# Escopo do Google Drive
+FERIADOS = ["2024-12-24", "2024-12-25", "2024-12-31", "2025-01-01"]
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # ------------------ Funções de Google Drive -------------------
 def autenticar_google_drive():
-    """Autentica o Google Drive e retorna o serviço."""
     creds = None
     if os.path.exists("token.pickle"):
         with open("token.pickle", "rb") as token:
@@ -33,7 +32,6 @@ def autenticar_google_drive():
 
 
 def criar_pasta_no_drive(service):
-    """Cria uma pasta no Google Drive se não existir."""
     query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder'"
     response = service.files().list(q=query, spaces="drive").execute()
     items = response.get("files", [])
@@ -46,7 +44,6 @@ def criar_pasta_no_drive(service):
 
 
 def salvar_arquivo_no_drive(service, folder_id, arquivo_nome):
-    """Salva um arquivo JSON no Google Drive."""
     file_metadata = {"name": arquivo_nome, "parents": [folder_id]}
     media = MediaFileUpload(arquivo_nome, mimetype="application/json")
     service.files().create(body=file_metadata, media_body=media).execute()
@@ -54,18 +51,15 @@ def salvar_arquivo_no_drive(service, folder_id, arquivo_nome):
 
 # ------------------ Funções de Registro de Ponto -------------------
 def carregar_dados(arquivo):
-    """Carrega dados de um arquivo JSON."""
     return json.load(open(arquivo)) if os.path.exists(arquivo) else {}
 
 
 def salvar_dados(arquivo, dados):
-    """Salva dados em um arquivo JSON."""
     with open(arquivo, "w") as f:
         json.dump(dados, f, indent=4)
 
 
 def registrar_batida(dados):
-    """Registra as batidas de ponto."""
     hoje = datetime.now().strftime("%Y-%m-%d")
     if hoje not in dados:
         dados[hoje] = []
@@ -79,7 +73,6 @@ def registrar_batida(dados):
 
 
 def editar_batida(dados):
-    """Edita um horário de batida."""
     hoje = datetime.now().strftime("%Y-%m-%d")
     if hoje not in dados or not dados[hoje]:
         print("⚠️ Nenhuma batida registrada hoje para editar!")
@@ -104,66 +97,50 @@ def editar_batida(dados):
     except ValueError:
         print("❌ Entrada inválida. Use o formato HH:MM:SS.")
 
-# ------------------ Funções de Relatório -------------------
-def exibir_relatorio_dia(data, batidas):
-    """Exibe um relatório para um único dia e calcula horas extras."""
-    print(f"📅 Data: {data}")
-    if len(batidas) < 4:
-        print("⚠️ Dia incompleto.")
-        return timedelta(), JORNADA_DIARIA, timedelta()
-    elif batidas == ["falta"]:
-        print("⚠️ Falta registrada.")
-        return timedelta(), JORNADA_DIARIA, timedelta()
+
+def registrar_falta(dados):
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    if hoje not in dados:
+        dados[hoje] = ["falta"]
+        print(f"⚠️ Falta registrada para {hoje}.")
     else:
-        entrada = datetime.strptime(batidas[0], "%H:%M:%S")
-        saida_intervalo = datetime.strptime(batidas[1], "%H:%M:%S")
-        retorno_intervalo = datetime.strptime(batidas[2], "%H:%M:%S")
-        saida = datetime.strptime(batidas[3], "%H:%M:%S")
-        total_trabalhado = (saida_intervalo - entrada) + (saida - retorno_intervalo)
-        horas_extras = max(total_trabalhado - JORNADA_DIARIA, timedelta())
-        print(f"⏳ Total trabalhado: {total_trabalhado}")
-        print(f"⏰ Horas extras: {horas_extras}")
-        return total_trabalhado, JORNADA_DIARIA, horas_extras
+        print(f"⚠️ Já há registro para {hoje}.")
+    salvar_dados(ARQUIVO_DADOS, dados)
 
 
-def gerar_relatorio(dados):
-    """Gera relatório diário."""
-    print("\n📋 Relatório de Ponto")
-    saldo_devedor = timedelta()
+def exibir_relatorio_dia(data, batidas):
+    if len(batidas) < 4 or "falta" in batidas:
+        print(f"⚠️ {data}: Dia incompleto ou falta registrada.")
+        return timedelta(), timedelta()
+
+    entrada = datetime.strptime(batidas[0], "%H:%M:%S")
+    saida_intervalo = datetime.strptime(batidas[1], "%H:%M:%S")
+    retorno_intervalo = datetime.strptime(batidas[2], "%H:%M:%S")
+    saida = datetime.strptime(batidas[3], "%H:%M:%S")
+    total_trabalhado = (saida_intervalo - entrada) + (saida - retorno_intervalo)
+    horas_extras = max(total_trabalhado - JORNADA_DIARIA, timedelta())
+    horas_devidas = max(JORNADA_DIARIA - total_trabalhado, timedelta())
+    print(f"{data}: ⏳ Trabalhado: {total_trabalhado}, ⏰ Extras: {horas_extras}, ❌ Devidas: {horas_devidas}")
+    return horas_extras, horas_devidas
+
+
+def calcular_valores(dados):
     horas_extras_totais = timedelta()
+    horas_devidas_totais = timedelta()
+    
     for data, batidas in sorted(dados.items()):
-        total_trabalhado, jornada, horas_extras = exibir_relatorio_dia(data, batidas)
+        dia_semana = datetime.strptime(data, "%Y-%m-%d").weekday()
+        if dia_semana >= 5 or data in FERIADOS:
+            continue  # Ignorar sábados, domingos e feriados
+        
+        horas_extras, horas_devidas = exibir_relatorio_dia(data, batidas)
         horas_extras_totais += horas_extras
-        if total_trabalhado < jornada:
-            saldo_devedor += jornada - total_trabalhado
-    print(f"\n💼 Saldo devedor total: {saldo_devedor}")
-    print(f"💼 Total de horas extras: {horas_extras_totais}")
-
-
-def gerar_relatorio_mensal(dados):
-    """Gera relatório mensal com horas extras."""
-    print("\n📋 Relatório Mensal de Ponto")
-    saldo_devedor = timedelta()
-    horas_extras_totais = timedelta()
-    total_trabalhado_mes = timedelta()
-
-    # Agrupa e soma os totais trabalhados para cada dia no mês
-    for data, batidas in sorted(dados.items()):
-        try:
-            mes_ano = datetime.strptime(data, "%Y-%m-%d").strftime("%Y-%m")
-            total_trabalhado, jornada, horas_extras = exibir_relatorio_dia(data, batidas)
-            total_trabalhado_mes += total_trabalhado
-            horas_extras_totais += horas_extras
-            if total_trabalhado < jornada:
-                saldo_devedor += jornada - total_trabalhado
-        except ValueError:
-            continue
-
-    # Relatório Mensal
-    print(f"\n📅 Total trabalhado no mês: {total_trabalhado_mes}")
-    print(f"💼 Saldo devedor no mês: {saldo_devedor}")
-    print(f"🕒 Jornada mensal: {JORNADA_DIARIA * 22}")  # Considerando 22 dias úteis no mês
-    print(f"⏰ Total de horas extras no mês: {horas_extras_totais}")
+        horas_devidas_totais += horas_devidas
+    
+    valor_extras = (horas_extras_totais.total_seconds() / 3600) * VALOR_HORA
+    valor_devido = (horas_devidas_totais.total_seconds() / 3600) * VALOR_HORA
+    print(f"\n💼 Valor por horas extras: R$ {valor_extras:.2f}")
+    print(f"💼 Desconto por horas devidas: R$ {valor_devido:.2f}")
 
 # ------------------ Menu Principal -------------------
 def menu():
@@ -175,10 +152,11 @@ def menu():
         print("\n=== Sistema de Gerenciamento de Ponto ===")
         print("1. Registrar batida de ponto")
         print("2. Editar horário de batida")
-        print("3. Gerar relatório diário")
-        print("4. Gerar relatório mensal")
+        print("3. Registrar falta")
+        print("4. Gerar relatório diário")
         print("5. Salvar dados no Google Drive")
-        print("6. Sair")
+        print("6. Calcular valores de extras e devidos")
+        print("7. Sair")
         opcao = input("Escolha uma opção: ").strip()
 
         if opcao == "1":
@@ -186,12 +164,15 @@ def menu():
         elif opcao == "2":
             editar_batida(dados)
         elif opcao == "3":
-            gerar_relatorio(dados)
+            registrar_falta(dados)
         elif opcao == "4":
-            gerar_relatorio_mensal(dados)
+            for data, batidas in sorted(dados.items()):
+                exibir_relatorio_dia(data, batidas)
         elif opcao == "5":
             salvar_arquivo_no_drive(service, folder_id, ARQUIVO_DADOS)
         elif opcao == "6":
+            calcular_valores(dados)
+        elif opcao == "7":
             print("🔚 Saindo do sistema. Até logo!")
             break
         else:
