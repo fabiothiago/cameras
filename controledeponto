@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from calendar import monthrange
 
 # Constantes do sistema
 ARQUIVO_DADOS = "ponto.json"
@@ -49,7 +50,7 @@ def salvar_arquivo_no_drive(service, folder_id, arquivo_nome):
     service.files().create(body=file_metadata, media_body=media).execute()
     print(f"✅ Arquivo '{arquivo_nome}' salvo no Google Drive.")
 
-# ------------------ Funções de Registro de Ponto -------------------
+# ------------------ Funções Auxiliares -------------------
 def carregar_dados(arquivo):
     return json.load(open(arquivo)) if os.path.exists(arquivo) else {}
 
@@ -59,16 +60,35 @@ def salvar_dados(arquivo, dados):
         json.dump(dados, f, indent=4)
 
 
+def pertence_ao_mes_vigente(data):
+    hoje = datetime.now()
+    data_obj = datetime.strptime(data, "%Y-%m-%d")
+    return data_obj.year == hoje.year and data_obj.month == hoje.month
+
+# ------------------ Funções de Registro de Ponto -------------------
 def registrar_batida(dados):
     hoje = datetime.now().strftime("%Y-%m-%d")
     if hoje not in dados:
         dados[hoje] = []
+
     if len(dados[hoje]) < 4:
         hora = datetime.now().strftime("%H:%M:%S")
         dados[hoje].append(hora)
         print(f"✅ Batida registrada: {hora}")
+
+        # Calcular horário previsto de saída se for a primeira ou segunda batida
+        if len(dados[hoje]) == 1:  # Primeira batida
+            entrada = datetime.strptime(hora, "%H:%M:%S")
+            saida_prevista = entrada + JORNADA_DIARIA
+            print(f"🕒 Horário previsto de saída: {saida_prevista.strftime('%H:%M:%S')}")
+        elif len(dados[hoje]) == 2:  # Segunda batida
+            entrada = datetime.strptime(dados[hoje][0], "%H:%M:%S")
+            intervalo = datetime.strptime(hora, "%H:%M:%S") - entrada
+            saida_prevista = datetime.strptime(hora, "%H:%M:%S") + (JORNADA_DIARIA - intervalo)
+            print(f"🕒 Horário previsto de saída: {saida_prevista.strftime('%H:%M:%S')}")
     else:
         print("⚠️ Todas as 4 batidas já foram registradas para hoje!")
+    
     salvar_dados(ARQUIVO_DADOS, dados)
 
 
@@ -109,6 +129,9 @@ def registrar_falta(dados):
 
 
 def exibir_relatorio_dia(data, batidas):
+    if not pertence_ao_mes_vigente(data):
+        return timedelta(), timedelta()
+
     if len(batidas) < 4 or "falta" in batidas:
         print(f"⚠️ {data}: Dia incompleto ou falta registrada.")
         return timedelta(), timedelta()
@@ -127,8 +150,11 @@ def exibir_relatorio_dia(data, batidas):
 def calcular_valores(dados):
     horas_extras_totais = timedelta()
     horas_devidas_totais = timedelta()
-    
+
     for data, batidas in sorted(dados.items()):
+        if not pertence_ao_mes_vigente(data):
+            continue  # Ignorar dias fora do mês vigente
+        
         dia_semana = datetime.strptime(data, "%Y-%m-%d").weekday()
         if dia_semana >= 5 or data in FERIADOS:
             continue  # Ignorar sábados, domingos e feriados
