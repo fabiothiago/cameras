@@ -5,14 +5,16 @@ from datetime import datetime, timedelta
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from calendar import monthrange
 
 # Constantes do sistema
 ARQUIVO_DADOS = "ponto.json"
 SALARIO_BASE = 5096.52
-HORAS_MENSAIS = 220
+HORAS_MENSAIS = 220  # Jornada mensal padrão de 220 horas
 VALOR_HORA = SALARIO_BASE / HORAS_MENSAIS
 JORNADA_DIARIA = timedelta(hours=8)
 DRIVE_FOLDER_NAME = "PontoGerenciado"
+
 FERIADOS = ["2024-12-24", "2024-12-25", "2024-12-31", "2025-01-01"]
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
@@ -29,6 +31,7 @@ def autenticar_google_drive():
             pickle.dump(creds, token)
     return build("drive", "v3", credentials=creds)
 
+
 def criar_pasta_no_drive(service):
     query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder'"
     response = service.files().list(q=query, spaces="drive").execute()
@@ -36,21 +39,26 @@ def criar_pasta_no_drive(service):
     if not items:
         file_metadata = {"name": DRIVE_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"}
         folder = service.files().create(body=file_metadata, fields="id").execute()
+        print(f"Pasta '{DRIVE_FOLDER_NAME}' criada no Google Drive.")
         return folder.get("id")
     return items[0].get("id")
+
 
 def salvar_arquivo_no_drive(service, folder_id, arquivo_nome):
     file_metadata = {"name": arquivo_nome, "parents": [folder_id]}
     media = MediaFileUpload(arquivo_nome, mimetype="application/json")
     service.files().create(body=file_metadata, media_body=media).execute()
+    print(f"✅ Arquivo '{arquivo_nome}' salvo no Google Drive.")
 
 # ------------------ Funções Auxiliares -------------------
 def carregar_dados(arquivo):
     return json.load(open(arquivo)) if os.path.exists(arquivo) else {}
 
+
 def salvar_dados(arquivo, dados):
     with open(arquivo, "w") as f:
         json.dump(dados, f, indent=4)
+
 
 def pertence_ao_mes_vigente(data):
     hoje = datetime.now()
@@ -67,6 +75,8 @@ def registrar_batida(dados):
         hora = datetime.now().strftime("%H:%M:%S")
         dados[hoje].append(hora)
         print(f"✅ Batida registrada: {hora}")
+
+        # Calcular horário previsto de saída se for a primeira ou segunda batida
         if len(dados[hoje]) == 1:  # Primeira batida
             entrada = datetime.strptime(hora, "%H:%M:%S")
             saida_prevista = entrada + JORNADA_DIARIA
@@ -80,6 +90,43 @@ def registrar_batida(dados):
         print("⚠️ Todas as 4 batidas já foram registradas para hoje!")
     
     salvar_dados(ARQUIVO_DADOS, dados)
+
+
+def editar_batida(dados):
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    if hoje not in dados or not dados[hoje]:
+        print("⚠️ Nenhuma batida registrada hoje para editar!")
+        return
+
+    print(f"\n📅 Batidas registradas para {hoje}:")
+    for i, batida in enumerate(dados[hoje], start=1):
+        print(f"{i}. {batida}")
+
+    try:
+        numero = int(input("Digite o número da batida que deseja editar: "))
+        if numero < 1 or numero > len(dados[hoje]):
+            print("❌ Número inválido.")
+            return
+
+        novo_horario = input(f"Digite o novo horário para a batida {numero} (HH:MM:SS): ")
+        datetime.strptime(novo_horario, "%H:%M:%S")  # Valida o formato
+        dados[hoje][numero - 1] = novo_horario
+        print(f"✅ Batida {numero} editada para: {novo_horario}")
+        salvar_dados(ARQUIVO_DADOS, dados)
+
+    except ValueError:
+        print("❌ Entrada inválida. Use o formato HH:MM:SS.")
+
+
+def registrar_falta(dados):
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    if hoje not in dados:
+        dados[hoje] = ["falta"]
+        print(f"⚠️ Falta registrada para {hoje}.")
+    else:
+        print(f"⚠️ Já há registro para {hoje}.")
+    salvar_dados(ARQUIVO_DADOS, dados)
+
 
 def exibir_relatorio_dia(data, batidas):
     if not pertence_ao_mes_vigente(data):
@@ -99,6 +146,7 @@ def exibir_relatorio_dia(data, batidas):
     print(f"{data}: ⏳ Trabalhado: {total_trabalhado}, ⏰ Extras: {horas_extras}, ❌ Devidas: {horas_devidas}")
     return horas_extras, horas_devidas
 
+
 def calcular_valores(dados):
     horas_extras_totais = timedelta()
     horas_devidas_totais = timedelta()
@@ -115,9 +163,9 @@ def calcular_valores(dados):
         horas_extras_totais += horas_extras
         horas_devidas_totais += horas_devidas
     
-    valor_extras = 2 * (horas_extras_totais.total_seconds() / 3600) * VALOR_HORA
+    valor_extras = (horas_extras_totais.total_seconds() / 3600) * VALOR_HORA
     valor_devido = (horas_devidas_totais.total_seconds() / 3600) * VALOR_HORA
-    print(f"\n💼 Valor por horas extras (100% adicional): R$ {valor_extras:.2f}")
+    print(f"\n💼 Valor por horas extras: R$ {valor_extras:.2f}")
     print(f"💼 Desconto por horas devidas: R$ {valor_devido:.2f}")
 
 # ------------------ Menu Principal -------------------
@@ -130,10 +178,11 @@ def menu():
         print("\n=== Sistema de Gerenciamento de Ponto ===")
         print("1. Registrar batida de ponto")
         print("2. Editar horário de batida")
-        print("3. Gerar relatório diário")
-        print("4. Salvar dados no Google Drive")
-        print("5. Calcular valores de extras e devidos")
-        print("6. Sair")
+        print("3. Registrar falta")
+        print("4. Gerar relatório diário")
+        print("5. Salvar dados no Google Drive")
+        print("6. Calcular valores de extras e devidos")
+        print("7. Sair")
         opcao = input("Escolha uma opção: ").strip()
 
         if opcao == "1":
@@ -141,13 +190,15 @@ def menu():
         elif opcao == "2":
             editar_batida(dados)
         elif opcao == "3":
+            registrar_falta(dados)
+        elif opcao == "4":
             for data, batidas in sorted(dados.items()):
                 exibir_relatorio_dia(data, batidas)
-        elif opcao == "4":
-            salvar_arquivo_no_drive(service, folder_id, ARQUIVO_DADOS)
         elif opcao == "5":
-            calcular_valores(dados)
+            salvar_arquivo_no_drive(service, folder_id, ARQUIVO_DADOS)
         elif opcao == "6":
+            calcular_valores(dados)
+        elif opcao == "7":
             print("🔚 Saindo do sistema. Até logo!")
             break
         else:
@@ -155,3 +206,5 @@ def menu():
 
 if __name__ == "__main__":
     menu()
+
+
